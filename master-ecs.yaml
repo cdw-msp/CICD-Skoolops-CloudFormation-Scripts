@@ -1,0 +1,119 @@
+Description: >
+    This template deploys a VPC, with a pair of public and private subnets spread
+    across two Availabilty Zones. It deploys an Internet Gateway, with a default
+    route on the public subnets. It deploys a pair of NAT Gateways (one in each AZ),
+    and default routes for them in the private subnets. 
+
+Conditions:
+  IsUSEast1:
+    Fn::Equals:
+    - !Ref AWS::Region
+    - "us-east-1"
+Parameters:
+
+    InfraAutomationCfnBucket:
+        Description: S3 bucket containing the cloudformation infrastructure automation code for ECS, cicd microservices
+        Type: String
+    CodeBuildContainerSpringBootDocker:
+        Description: Codebuild custom container to run maven build for java, build docker container and push to ECR
+        Type: String
+    KeyPair:
+        Description: Amazon EC2 Key Pair for SSH
+        Type: "AWS::EC2::KeyPair::KeyName"
+    CodeCommitRepo:
+        Description: source code repo name
+        Type: String
+    MicroServiceName:
+        Description: Micro service name
+        Type: String
+    VpcId:
+        Description: VPC id to launch the instances
+        Type: String
+    PrivateSubnets:
+        Description: Subnets to launch the instances
+        Type: String
+    PublicSubnets:
+        Description: Subnets to launch ALB
+        Type: String
+    ECSSecurityGroup:
+        Type: String
+    ELBSecurityGroup:
+        Type: String
+    ECRRepositoryBaseName:
+        Type: String
+    EcsClusterName:
+        Type: String
+    
+
+
+Resources:
+    # with default vpc - this is working
+    # ECSCluster:
+    #     Type: AWS::CloudFormation::Stack
+    #     Properties:
+    #         TemplateURL: !Sub https://s3-${AWS::Region}.amazonaws.com/${InfraAutomationCfnBucket}/ecs-cluster.yaml
+    #         Parameters:
+    #             EcsClusterName: !Sub "${AWS::StackName}-ECSCluster"
+    #             EcsInstanceType: "m4.xlarge"
+    #             AsgMaxSize: 2
+    #             VpcId: 'vpc-fd250e99'
+    #             SubnetIds: 'subnet-a618faef,subnet-03d82664'
+    #             VpcAvailabilityZones: 'ap-southeast-1a,ap-southeast-1b'
+    #             EnvironmentName: !Ref AWS::StackName
+    #             KeyName: "mysshkey"
+
+    #to create new vpc in 2AZ Reg.
+    ECSCluster:
+        Type: AWS::CloudFormation::Stack
+        Properties:
+            # TemplateURL: !Sub https://s3-${AWS::Region}.amazonaws.com/${InfraAutomationCfnBucket}/ecs-cluster-2az.yaml
+            TemplateURL:
+              Fn::If: 
+              - IsUSEast1
+              - !Sub "https://s3.amazonaws.com/${InfraAutomationCfnBucket}/ecs-cluster-2az-novpc.yaml"
+              - !Sub "https://s3-${AWS::Region}.amazonaws.com/${InfraAutomationCfnBucket}/ecs-cluster-2az-novpc.yaml"
+            Parameters:
+                EcsClusterName: !Ref EcsClusterName
+                EcsInstanceType: "t2.micro"
+                AsgMaxSize: 2
+                EnvironmentName: !Ref AWS::StackName
+                KeyName: !Ref KeyPair
+                SecurityGroup: !Ref ECSSecurityGroup
+                SubnetIds: !Ref PrivateSubnets
+                VpcId: !Ref VpcId
+            
+    ALB:
+        Type: AWS::CloudFormation::Stack
+        DependsOn: ECSCluster
+        Properties:
+            # TemplateURL: !Sub https://s3-${AWS::Region}.amazonaws.com/${InfraAutomationCfnBucket}/alb.yaml
+            TemplateURL:
+              Fn::If: 
+              - IsUSEast1
+              - !Sub "https://s3.amazonaws.com/${InfraAutomationCfnBucket}/alb.yaml"
+              - !Sub "https://s3-${AWS::Region}.amazonaws.com/${InfraAutomationCfnBucket}/alb.yaml"
+            Parameters:
+                EnvironmentName: !Ref AWS::StackName
+                VpcId: !Ref VpcId
+                PubELBSubnets: !Ref PublicSubnets
+                ElbSecurityGroup: !Ref ELBSecurityGroup
+
+    CodePipelineSystem:
+        Type: AWS::CloudFormation::Stack
+        Properties:
+            # TemplateURL: !Sub https://s3-${AWS::Region}.amazonaws.com/${InfraAutomationCfnBucket}/deployment-pipeline-codecommit.yaml
+            TemplateURL:
+              Fn::If: 
+              - IsUSEast1
+              - !Sub "https://s3.amazonaws.com/${InfraAutomationCfnBucket}/deployment-pipeline-codecommit.yaml"
+              - !Sub "https://s3-${AWS::Region}.amazonaws.com/${InfraAutomationCfnBucket}/deployment-pipeline-codecommit.yaml"
+            Parameters:
+                EnvironmentName: !Ref AWS::StackName
+                CodeCommitRepo: !Ref CodeCommitRepo
+                ECRRepositoryBaseName: !Ref ECRRepositoryBaseName
+                MicroServiceName: !Ref MicroServiceName
+                CodeBuildContainerSpringBootDocker: !Ref CodeBuildContainerSpringBootDocker
+                VpcId: !Ref VpcId
+                ALBListener: !GetAtt ALB.Outputs.ALBListener
+                ECSCluster: !GetAtt ECSCluster.Outputs.ECSCluster
+                CfnTemplateBucket: !Ref InfraAutomationCfnBucket
